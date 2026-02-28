@@ -15,10 +15,20 @@ let chatHistory = [
 	{
 		role: "assistant",
 		content:
-			"Hello! I'm an LLM chat app powered by Cloudflare Workers AI. How can I help you today?",
+			"Hello! I'm an LLM chat app. Choose an agent above and ask me anything.",
 	},
 ];
 let isProcessing = false;
+
+// Helper: get selected agent from index script (fallback safe)
+function getAgent() {
+	try {
+		if (typeof window.getSelectedAgent === "function") {
+			return window.getSelectedAgent() || "azure";
+		}
+	} catch (_) {}
+	return "azure";
+}
 
 // Auto-resize textarea as user types
 userInput.addEventListener("input", function () {
@@ -46,6 +56,8 @@ async function sendMessage() {
 	// Don't send empty messages
 	if (message === "" || isProcessing) return;
 
+	const agent = getAgent();
+
 	// Disable input while processing
 	isProcessing = true;
 	userInput.disabled = true;
@@ -68,9 +80,20 @@ async function sendMessage() {
 		// Create new assistant response element
 		const assistantMessageEl = document.createElement("div");
 		assistantMessageEl.className = "message assistant-message";
-		assistantMessageEl.innerHTML = "<p></p>";
+
+		// Agent badge (small, non-invasive)
+		const badge = document.createElement("div");
+		badge.textContent = agent === "cf" ? "Cloudflare" : "Azure";
+		badge.style.fontSize = "0.75rem";
+		badge.style.color = "#6b7280";
+		badge.style.marginBottom = "0.25rem";
+
+		const p = document.createElement("p");
+		assistantMessageEl.appendChild(badge);
+		assistantMessageEl.appendChild(p);
+
 		chatMessages.appendChild(assistantMessageEl);
-		const assistantTextEl = assistantMessageEl.querySelector("p");
+		const assistantTextEl = p;
 
 		// Scroll to bottom
 		chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -82,13 +105,18 @@ async function sendMessage() {
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify({
+				agent, // ✅ NEW
 				messages: chatHistory,
 			}),
 		});
 
 		// Handle errors
 		if (!response.ok) {
-			throw new Error("Failed to get response");
+			let details = "";
+			try {
+				details = await response.text();
+			} catch (_) {}
+			throw new Error(`Failed to get response (${response.status}) ${details}`);
 		}
 		if (!response.body) {
 			throw new Error("Response body is null");
@@ -99,6 +127,7 @@ async function sendMessage() {
 		const decoder = new TextDecoder();
 		let responseText = "";
 		let buffer = "";
+
 		const flushAssistantText = () => {
 			assistantTextEl.textContent = responseText;
 			chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -112,64 +141,49 @@ async function sendMessage() {
 				// Process any remaining complete events in buffer
 				const parsed = consumeSseEvents(buffer + "\n\n");
 				for (const data of parsed.events) {
-					if (data === "[DONE]") {
-						break;
-					}
-					try {
-						const jsonData = JSON.parse(data);
-						// Handle both Workers AI format (response) and OpenAI format (choices[0].delta.content)
-						let content = "";
-						if (
-							typeof jsonData.response === "string" &&
-							jsonData.response.length > 0
-						) {
-							content = jsonData.response;
-						} else if (jsonData.choices?.[0]?.delta?.content) {
-							content = jsonData.choices[0].delta.content;
-						}
-						if (content) {
-							responseText += content;
-							flushAssistantText();
-						}
-					} catch (e) {
-						console.error("Error parsing SSE data as JSON:", e, data);
-					}
+					if (data === "[DONE]") break;
+					appendChunkFromSseData(data);
 				}
 				break;
 			}
 
 			// Decode chunk
 			buffer += decoder.decode(value, { stream: true });
+
 			const parsed = consumeSseEvents(buffer);
 			buffer = parsed.buffer;
+
 			for (const data of parsed.events) {
 				if (data === "[DONE]") {
 					sawDone = true;
 					buffer = "";
 					break;
 				}
-				try {
-					const jsonData = JSON.parse(data);
-					// Handle both Workers AI format (response) and OpenAI format (choices[0].delta.content)
-					let content = "";
-					if (
-						typeof jsonData.response === "string" &&
-						jsonData.response.length > 0
-					) {
-						content = jsonData.response;
-					} else if (jsonData.choices?.[0]?.delta?.content) {
-						content = jsonData.choices[0].delta.content;
-					}
-					if (content) {
-						responseText += content;
-						flushAssistantText();
-					}
-				} catch (e) {
-					console.error("Error parsing SSE data as JSON:", e, data);
-				}
+				appendChunkFromSseData(data);
 			}
-			if (sawDone) {
-				break;
+
+			if (sawDone) break;
+		}
+
+		function appendChunkFromSseData(data) {
+			try {
+				const jsonData = JSON.parse(data);
+
+				// Handle both Workers AI format (response) and OpenAI/Azure format (choices[0].delta.content)
+				let content = "";
+				if (typeof jsonData.response === "string" && jsonData.response.length > 0) {
+					content = jsonData.response;
+				} else if (jsonData.choices?.[0]?.delta?.content) {
+					content = jsonData.choices[0].delta.content;
+				}
+
+				if (content) {
+					responseText += content;
+					flushAssistantText();
+				}
+			} catch (e) {
+				// Some providers can send keep-alives or non-JSON "data:" frames. Ignore safely.
+				// console.debug("Non-JSON SSE frame:", data);
 			}
 		}
 
@@ -179,10 +193,7 @@ async function sendMessage() {
 		}
 	} catch (error) {
 		console.error("Error:", error);
-		addMessageToChat(
-			"assistant",
-			"Sorry, there was an error processing your request.",
-		);
+		addMessageToChat("assistant", "Sorry, there was an error processing your request.");
 	} finally {
 		// Hide typing indicator
 		typingIndicator.classList.remove("visible");
@@ -201,11 +212,21 @@ async function sendMessage() {
 function addMessageToChat(role, content) {
 	const messageEl = document.createElement("div");
 	messageEl.className = `message ${role}-message`;
-	messageEl.innerHTML = `<p>${content}</p>`;
+	messageEl.innerHTML = `<p>${escapeHtml(content)}</p>`;
 	chatMessages.appendChild(messageEl);
 
 	// Scroll to bottom
 	chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Basic HTML escape to prevent injecting markup in messages
+function escapeHtml(str) {
+	return String(str)
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#039;");
 }
 
 function consumeSseEvents(buffer) {

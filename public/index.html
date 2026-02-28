@@ -86,6 +86,50 @@
 				align-self: flex-start;
 			}
 
+			/* NEW: Agent selector */
+			.agent-bar {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 0.75rem;
+				padding: 0.6rem 0.75rem;
+				border-bottom: 1px solid var(--border-color);
+				background: white;
+			}
+
+			.agent-bar .label {
+				font-size: 0.9rem;
+				color: var(--text-light);
+				white-space: nowrap;
+			}
+
+			.agent-buttons {
+				display: inline-flex;
+				gap: 0.5rem;
+				flex-wrap: wrap;
+				justify-content: flex-end;
+				width: 100%;
+			}
+
+			.agent-btn {
+				padding: 0.35rem 0.7rem;
+				border: 1px solid var(--border-color);
+				border-radius: 999px;
+				background: white;
+				cursor: pointer;
+				font-size: 0.85rem;
+				transition: background-color 0.2s, border-color 0.2s;
+			}
+
+			.agent-btn:hover {
+				border-color: var(--primary-color);
+			}
+
+			.agent-btn.active {
+				background: var(--user-msg-bg);
+				border-color: var(--primary-color);
+			}
+
 			.message-input {
 				display: flex;
 				padding: 0.75rem;
@@ -149,11 +193,19 @@
 		</header>
 
 		<div class="chat-container">
+			<!-- NEW: agent selector bar -->
+			<div class="agent-bar">
+				<div class="label">Agent:</div>
+				<div class="agent-buttons" role="group" aria-label="Agent selection">
+					<button class="agent-btn" data-agent="azure" type="button">Azure OpenAI</button>
+					<button class="agent-btn" data-agent="cf" type="button">Cloudflare AI</button>
+				</div>
+			</div>
+
 			<div id="chat-messages" class="chat-messages">
 				<div class="message assistant-message">
 					<p>
-						Hello! I'm an LLM chat app powered by Cloudflare Workers AI. How can
-						I help you today?
+						Hello! I'm an LLM chat app. Choose an agent above and ask me anything.
 					</p>
 				</div>
 			</div>
@@ -176,6 +228,42 @@
 		<footer>
 			<p>Cloudflare Workers AI Chat Template &copy; 2025</p>
 		</footer>
+
+		<!-- NEW: small agent selection script -->
+		<script>
+			(function () {
+				const STORAGE_KEY = "selectedAgent";
+				const DEFAULT_AGENT = "azure";
+
+				function setActive(agent) {
+					document.querySelectorAll(".agent-btn").forEach((btn) => {
+						btn.classList.toggle("active", btn.dataset.agent === agent);
+					});
+				}
+
+				function getSelectedAgent() {
+					return localStorage.getItem(STORAGE_KEY) || DEFAULT_AGENT;
+				}
+
+				function setSelectedAgent(agent) {
+					localStorage.setItem(STORAGE_KEY, agent);
+					setActive(agent);
+				}
+
+				// expose for chat.js
+				window.getSelectedAgent = getSelectedAgent;
+
+				// init
+				setActive(getSelectedAgent());
+
+				// click handlers
+				document.querySelectorAll(".agent-btn").forEach((btn) => {
+					btn.addEventListener("click", () => {
+						setSelectedAgent(btn.dataset.agent);
+					});
+				});
+			})();
+		</script>
 
 		<!-- Chat app script -->
 		<script src="chat.js"></script>
